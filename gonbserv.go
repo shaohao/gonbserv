@@ -3,25 +3,34 @@ package main
 import (
 	"bytes"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
 	"net"
 	"os"
+	"os/signal"
 	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
 func main() {
-	ln, err := net.Listen("tcp", "127.0.0.1:2121")
-	if err != nil {
-		log.Println(err)
-		return
-	}
+	rw := flag.Bool("rw", false, "Allow read/write access")
+	all := flag.Bool("all", false, "Show all(hidden) entries")
+	dhcp := flag.Bool("dhcp", false, "Enable DHCP server")
+	dhcpRange := flag.String("dhcprange", "", "IPv4 range for DHCP server")
+	tftp := flag.Bool("tftp", false, "Enable TFTP server")
+	tftpPort := flag.Int("tftpport", 69, "Port of TFTP server")
+	ftp := flag.Bool("ftp", false, "Enable FTP server")
+	ftpPort := flag.Int("ftpport", 21, "Port ot FTP server")
+	flag.Parse()
+
+	_, _, _, _ = dhcp, dhcpRange, tftp, tftpPort
 
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -29,22 +38,31 @@ func main() {
 		return
 	}
 
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			log.Println(err)
-			continue
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt)
+	signal.Notify(c, syscall.SIGTERM)
+
+	if *ftp {
+		ftpServ := &FTPServer{
+			rootPath:   cwd,
+			listenAddr: fmt.Sprintf("127.0.0.1:%d", *ftpPort),
+			writable:   *rw,
+			showHidden: *all,
 		}
-		s := newSession(conn, cwd)
-		go startPI(s)
+		go ftpServ.startServer()
+	}
+
+	for {
+		<-c
+		fmt.Println("Clean up")
+		os.Exit(0)
 	}
 }
 
 type VDirTree struct {
-	root       string
-	rpath      string
-	vpath      string
-	showHidden bool
+	root  string
+	rpath string
+	vpath string
 }
 
 func (vdt *VDirTree) reset() {
@@ -52,12 +70,9 @@ func (vdt *VDirTree) reset() {
 }
 
 func (vdt *VDirTree) mapVPath(vp string) (rabs string, vabs string) {
-	if filepath.IsAbs(vp) {
-		rpath := filepath.Join(vdt.root, vp[1:])
-		if _, err := os.Stat(rpath); err != nil {
-			rpath = ""
-		}
-		rabs, vabs = rpath, vp
+	if vp[:1] == "/" {
+		rabs = filepath.Join(vdt.root, vp[1:])
+		vabs = vp
 	} else {
 		rabs = filepath.Join(vdt.rpath, vp)
 		vabs = filepath.Join(vdt.vpath, vp)
@@ -67,9 +82,6 @@ func (vdt *VDirTree) mapVPath(vp string) (rabs string, vabs string) {
 
 func (vdt *VDirTree) doCWD(dir string) error {
 	rp, vp := vdt.mapVPath(dir)
-	if rp == "" {
-		return errors.New("Failed to change new directory!")
-	}
 	fi, err := os.Stat(rp)
 	if err != nil {
 		return errors.New("Failed to change new directory!")
@@ -78,6 +90,7 @@ func (vdt *VDirTree) doCWD(dir string) error {
 		return errors.New("Cannot change to a file!")
 	}
 	vdt.rpath, vdt.vpath = rp, vp
+	log.Printf("Current path: %s, %s", vdt.rpath, vdt.vpath)
 	return nil
 }
 
@@ -93,41 +106,67 @@ func (vdt *VDirTree) doUP() {
 	vdt.vpath = vp
 }
 
-func (vdt *VDirTree) doList(args string) {
+type FTPServer struct {
+	listenAddr string
+	rootPath   string
+	showHidden bool
+	writable   bool
 }
 
-type readerwriter interface {
-	Read([]byte) (int, error)
+func (serv *FTPServer) startServer() {
+	ln, err := net.Listen("tcp", serv.listenAddr)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+		s := newSession(serv, conn)
+		go s.startPI()
+	}
 }
 
 type session struct {
-	vdt  *VDirTree
-	conn net.Conn
+	vdt *VDirTree
+
+	server *FTPServer
+	conn   net.Conn
 
 	dataStart chan bool
 	dataEnd   chan bool
 
-	dataIo    io.ReadWriteSeeker
-	skipBytes uint64
+	dataReader  io.ReadSeeker
+	dataWriter  io.Writer
+	renameFrom  string
+	receiveSize uint64
+	skipBytes   uint64
 }
 
-func newSession(conn net.Conn, rootDir string) *session {
+func newSession(serv *FTPServer, conn net.Conn) *session {
 	return &session{
-		dataStart: make(chan bool),
-		dataEnd:   make(chan bool),
-		dataIo:    nil,
-		conn:      conn,
-		skipBytes: 0,
 		vdt: &VDirTree{
-			root:       rootDir,
-			rpath:      rootDir,
-			vpath:      "/",
-			showHidden: false,
+			root:  serv.rootPath,
+			rpath: serv.rootPath,
+			vpath: "/",
 		},
+		server:      serv,
+		conn:        conn,
+		dataStart:   make(chan bool),
+		dataEnd:     make(chan bool),
+		dataReader:  nil,
+		dataWriter:  nil,
+		renameFrom:  "",
+		receiveSize: 0,
+		skipBytes:   0,
 	}
 }
 
-func startPI(s *session) {
+func (s *session) startPI() {
 	buf := make([]byte, 1024)
 
 	s.conn.Write([]byte("220 Service ready\r\n"))
@@ -146,7 +185,8 @@ func startPI(s *session) {
 	}
 }
 
-func (s *session) reply(msg string) {
+func (s *session) reply(format string, a ...interface{}) {
+	msg := fmt.Sprintf(format, a...)
 	s.conn.Write([]byte(msg + "\r\n"))
 	log.Println(msg)
 }
@@ -160,6 +200,7 @@ func (s *session) processPI(buf []byte) (quit bool) {
 	}
 	log.Println("Client: ", instr)
 	quit = false
+	isAppend := false
 	switch strings.ToUpper(cmd) {
 	// access control commands
 	case "USER":
@@ -171,7 +212,7 @@ func (s *session) processPI(buf []byte) (quit bool) {
 	case "PASS":
 		s.reply("230 User logged in, proceed.")
 	case "CWD":
-		if s.vdt.doCWD(args) != nil {
+		if err := s.vdt.doCWD(args); err != nil {
 			s.reply("550 Failed to change directory.")
 		} else {
 			s.reply("250 Directory successfully changed.")
@@ -197,7 +238,7 @@ func (s *session) processPI(buf []byte) (quit bool) {
 		ip := strings.Replace(da[0], ".", ",", -1)
 		port, _ := strconv.Atoi(da[1])
 		m := "227 Entering Passive Mode (%s,%d,%d)."
-		s.reply(fmt.Sprintf(m, ip, (port >> 8), (port & 0xFF)))
+		s.reply(m, ip, (port >> 8), (port & 0xFF))
 	case "EPSV":
 		lip := strings.Split(s.conn.LocalAddr().String(), ":")[0]
 		daddr, err := s.startDTP(lip)
@@ -208,7 +249,7 @@ func (s *session) processPI(buf []byte) (quit bool) {
 		da := strings.Split(daddr, ":")
 		port, _ := strconv.Atoi(da[1])
 		m := "229 Entering Extended Passive Mode (|||%d|)."
-		s.reply(fmt.Sprintf(m, port))
+		s.reply(m, port)
 	case "TYPE":
 		s.reply("200 Switching to Binary mode (always).")
 	// service commands
@@ -226,33 +267,123 @@ func (s *session) processPI(buf []byte) (quit bool) {
 		}
 		defer fh.Close()
 
-		s.dataIo = fh
+		s.dataReader = fh
 		s.dataStart <- true
 		<-s.dataEnd
 		s.reply("226 Transfer complete.")
 		s.skipBytes = 0
-	case "STOR":
-		s.reply("532 Write not allowed")
+		s.dataReader = nil
 	case "APPE":
-		s.reply("532 Write not allowed")
+		isAppend = true
+		fallthrough
+	case "STOR":
+		if !s.server.writable {
+			s.reply("532 Write not allowed")
+			return
+		}
+		s.reply("150 Receiving File.")
+		rp, _ := s.vdt.mapVPath(args)
+		var fh *os.File
+		if isAppend {
+			fh, _ = os.OpenFile(rp, os.O_APPEND|os.O_WRONLY, 0644)
+		} else {
+			fh, _ = os.Create(rp)
+		}
+		defer fh.Close()
+
+		s.dataWriter = fh
+		s.dataStart <- true
+		<-s.dataEnd
+		s.reply("226 Closing data connection")
+		s.receiveSize = 0
+		s.dataWriter = nil
 	case "ALLO":
+		if !s.server.writable {
+			s.reply("532 Write not allowed")
+			return
+		}
+		s.receiveSize, _ = strconv.ParseUint(args, 10, 64)
 		s.reply("200 OK.")
 	case "REST":
 		skip, _ := strconv.ParseUint(args, 10, 64)
 		s.skipBytes = skip
-		s.reply(fmt.Sprintf("350 Restart position accepted %d.", skip))
+		s.reply("350 Restart position accepted %d.", skip)
 	case "RNFR":
-		s.reply("550 file not found: ")
+		if !s.server.writable {
+			s.reply("532 Write not allowed")
+			return
+		}
+		rp, vp := s.vdt.mapVPath(args)
+		if _, err := os.Stat(rp); err != nil {
+			s.reply("550 file not found: %s", vp)
+			return
+		}
+		s.renameFrom = rp
+		s.reply("350 File exists, please send target name.")
 	case "RNTO":
-		s.reply("550 rename failed")
+		if !s.server.writable {
+			s.reply("532 Write not allowed")
+			return
+		}
+		if s.renameFrom == "" {
+			s.reply("503 Bad command sequence")
+			return
+		}
+		rp, vp := s.vdt.mapVPath(args)
+		renameTo := rp
+		if _, err := os.Stat(renameTo); err == nil {
+			s.reply("550 file exists: %s", vp)
+			return
+		}
+		if err := os.Rename(s.renameFrom, renameTo); err != nil {
+			s.reply("550 rename failed (%s)", err)
+			return
+		}
+		s.reply("250 rename successful")
+		s.renameFrom = ""
 	case "DELE":
-		s.reply("550 delete failed")
+		if !s.server.writable {
+			s.reply("532 Write not allowed")
+			return
+		}
+		rp, _ := s.vdt.mapVPath(args)
+		if _, err := os.Stat(rp); err != nil {
+			s.reply("550 no such file.")
+			return
+		}
+		if err := os.Remove(rp); err != nil {
+			s.reply("550 delete failed (%s)", err)
+			return
+		}
+		s.reply("250 OK DELETED")
 	case "RMD":
-		s.reply("550 no such directory")
+		if !s.server.writable {
+			s.reply("532 Write not allowed")
+			return
+		}
+		rp, _ := s.vdt.mapVPath(args)
+		if _, err := os.Stat(rp); err != nil {
+			s.reply("550 no such directory.")
+			return
+		}
+		if err := os.RemoveAll(rp); err != nil {
+			s.reply("300 DELETE FAILED. (%s)", err)
+			return
+		}
+		s.reply("250 OK DELETED")
 	case "MKD":
-		s.reply("550 Cannot create.")
+		if !s.server.writable {
+			s.reply("532 Write not allowed")
+			return
+		}
+		rp, vp := s.vdt.mapVPath(args)
+		if err := os.Mkdir(rp, 0755); err != nil {
+			s.reply("550 Cannot create. (%s)", err)
+			return
+		}
+		s.reply("257 \"%s\" created.", vp)
 	case "PWD":
-		s.reply(fmt.Sprintf("257 \"%s\" is current directory.", s.vdt.vpath))
+		s.reply("257 \"%s\" is current directory.", s.vdt.vpath)
 	case "LIST":
 		obj := s.vdt.rpath
 		parseListArgs := func(args string) (list bool, all bool, obj string) {
@@ -273,8 +404,7 @@ func (s *session) processPI(buf []byte) (quit bool) {
 			return
 		}
 		_, all, o := parseListArgs(args)
-		log.Println(all)
-		s.vdt.showHidden = all
+		s.server.showHidden = all
 		if o != "" {
 			obj = o
 		}
@@ -286,14 +416,16 @@ func (s *session) processPI(buf []byte) (quit bool) {
 		if fi.Mode().IsDir() {
 			s.reply("150 Here comes the directory listing.")
 		} else {
-			s.reply("150 Here comes the file " + obj)
+			s.reply("150 Here comes the file %s", obj)
 		}
-		s.dataIo = bytes.NewReader([]byte{s.loadDirList(obj)})
+		s.dataReader = bytes.NewReader([]byte(s.loadDirList(obj)))
 		s.dataStart <- true
 		<-s.dataEnd
 		s.reply("226 Directory/File send OK.")
+		s.dataReader = nil
 	case "SYST":
-		s.reply("215 UNIX emulated by " + path.Base(filepath.ToSlash(os.Args[0])))
+		appName := path.Base(filepath.ToSlash(os.Args[0]))
+		s.reply("215 UNIX emulated by %s", appName)
 	case "NOOP":
 		s.reply("200 Okay")
 	// RFC2389
@@ -307,15 +439,15 @@ func (s *session) processPI(buf []byte) (quit bool) {
 		s.reply("211 End")
 	// RFC3659
 	case "OPTS":
-		name := args
-		//name, opts := args[0], args[1]
+		opts := strings.SplitN(args, " ", 2)
+		name, value := opts[0], opts[1]
 		switch strings.ToUpper(name) {
 		case "UTF8":
-			//utf8 := (strings.ToUpper(opts) == "ON")
-			//utf8 = true
+			utf8 := (strings.ToUpper(value) == "ON")
+			_ = utf8
 			s.reply("200 Always in UTF-8 mode.")
 		default:
-			s.reply("502 Unknown command " + name)
+			s.reply("502 Unknown command %s", name)
 		}
 	case "MDTM":
 		s.reply("550 no such file")
@@ -327,7 +459,7 @@ func (s *session) processPI(buf []byte) (quit bool) {
 			return
 		}
 		size := fi.Size()
-		s.reply(fmt.Sprintf("213 %d", size))
+		s.reply("213 %d", size)
 	default:
 		s.reply("550 not support.")
 	}
@@ -351,14 +483,30 @@ func (s *session) processFTPData(ln net.Listener) {
 	}
 	defer conn.Close()
 
+	const CHUNK_SIZE = 8 * 1024
+	buf := make([]byte, CHUNK_SIZE)
+
 	<-s.dataStart
-	buf := make([]byte, 256)
-	for {
-		n, err := s.dataIo.Read(buf)
-		if err != nil {
-			break
+	if s.dataWriter != nil {
+		for cnt := uint64(0); cnt <= s.receiveSize || s.receiveSize == 0; {
+			n, err := conn.Read(buf)
+			if err != nil { // err == io.EOF
+				break
+			}
+			s.dataWriter.Write(buf[:n])
+			cnt += uint64(n)
 		}
-		conn.Write(buf[:n])
+	} else if s.dataReader != nil {
+		if s.skipBytes > 0 {
+			s.dataReader.Seek(int64(s.skipBytes), 0)
+		}
+		for {
+			n, err := s.dataReader.Read(buf)
+			if err != nil {
+				break
+			}
+			conn.Write(buf[:n])
+		}
 	}
 	s.dataEnd <- true
 }
@@ -422,7 +570,7 @@ func (s *session) loadDirList(dir string) string {
 	files := []os.FileInfo{}
 	for _, entry := range entries {
 		if entry.IsDir() {
-			if s.vdt.showHidden || entry.Name()[:1] != "." {
+			if s.server.showHidden || entry.Name()[:1] != "." {
 				dirs = append(dirs, entry)
 			}
 		} else {
