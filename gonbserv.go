@@ -57,7 +57,10 @@ func (c *Configuration) genVDMap(vdirs string) (err error) {
 
 	items := strings.Split(vdirs, ",")
 	for _, item := range items {
-		vr := strings.Split(item, ":")
+		if len(item) == 0 {
+			continue
+		}
+		vr := strings.SplitN(item, ":", 2)
 		var v, r string
 		switch {
 		case len(vr) == 1:
@@ -264,6 +267,25 @@ func (vdt *VDirTree) doLIST(vpath string) (vlist []VEntry, err error) {
 		appendVEntry(entry)
 	}
 	vlist = append(vdirs, vfiles...)
+	return
+}
+
+func (vdt *VDirTree) doSIZE(vpath string) (size int64, err error) {
+	vp, rp, er := vdt.mapVPath(vpath)
+	// Okay to size virtual root
+	if er != nil && vp == "/" {
+		return
+	}
+	if er != nil {
+		err = er
+		return
+	}
+	fi, er := os.Stat(rp)
+	// Only for files
+	if er != nil || fi.IsDir() {
+		err = er
+	}
+	size = fi.Size()
 	return
 }
 
@@ -681,18 +703,11 @@ func (pi *FTPPISession) processCmd(buf []byte) (quit bool) {
 			mtime.Hour(), mtime.Minute(), mtime.Second(),
 		)
 	case "SIZE":
-		_, rp, er := pi.vdt.mapVPath(args)
-		if er != nil {
-			pi.reply("532 %s", er)
-			return
-		}
-		fi, err := os.Stat(rp)
-		// Only for files
-		if err != nil || fi.IsDir() {
+		size, err := pi.vdt.doSIZE(args)
+		if err != nil {
 			pi.reply("550 Could not get file size.")
 			return
 		}
-		size := fi.Size()
 		pi.reply("213 %d", size)
 	default:
 		pi.reply("550 not support.")
