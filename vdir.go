@@ -7,11 +7,17 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"time"
 )
 
 type VEntry struct {
-	vname     string
-	rfileinfo os.FileInfo
+	VPath string
+	RPath string
+	rfi   os.FileInfo
+}
+
+type VList struct {
+	vdirs, vfiles []*VEntry
 }
 
 type VDirTree struct {
@@ -23,37 +29,43 @@ func (vdt *VDirTree) reset() {
 	vdt.rpath, vdt.vpath = "", "/"
 }
 
-func (vdt *VDirTree) mapVPath(vp string) (vabs, rabs string, err error) {
+func (vdt *VDirTree) IsVRoot() bool {
+	return vdt.rpath == "" && vdt.vpath == "/"
+}
+
+func (vdt *VDirTree) mapVPath(vp string) (rabs, vabs string, err error) {
 	vp = path.Clean(vp)
-	if path.Base(vp)[:1] == "." && !conf.showHidden {
+	if !isVisible(vp) {
 		err = errors.New("Restrict path access")
 		return
 	}
-	if vp[:1] == "/" {
+	if vp[0] == '/' {
 		vabs = vp
 	} else {
 		vabs = path.Join(vdt.vpath, vp)
 	}
 	rabs, err = conf.findRPath(vabs)
+	// It's okay to map virtual root
+	if vabs == "/" {
+		rabs, err = "", nil
+	}
 	return
 }
 
 func (vdt *VDirTree) doCWD(vdir string) error {
-	vp, rp, err := vdt.mapVPath(vdir)
-	// it is okay to change to virtual root
-	if err != nil && vp == "/" {
-		vdt.rpath, vdt.vpath = "", vp
-		return nil
-	}
+	rp, vp, err := vdt.mapVPath(vdir)
 	if err != nil {
 		return err
 	}
-	fi, err := os.Stat(rp)
-	if err != nil {
-		return errors.New("Failed to change new directory!")
-	}
-	if !fi.IsDir() {
-		return errors.New("Cannot change to a file!")
+	// it is okay to change to virtual root
+	if rp != "" {
+		fi, err := os.Stat(rp)
+		if err != nil {
+			return errors.New("Failed to change new directory!")
+		}
+		if !fi.IsDir() {
+			return errors.New("Cannot change to a file!")
+		}
 	}
 	vdt.rpath, vdt.vpath = rp, vp
 	return nil
@@ -72,71 +84,134 @@ func (vdt *VDirTree) doUP() {
 	vdt.vpath = vp
 }
 
-func (vdt *VDirTree) doLIST(vpath string) (vlist []VEntry, err error) {
-	vp, rp, er := vdt.mapVPath(vpath)
-	log.Printf("vp: %s, rp: %s, er: %s\n", vp, rp, er)
-	var vdirs, vfiles []VEntry
-	appendVEntry := func(ve VEntry) {
-		if !conf.showHidden && ve.vname[:1] == "." {
-			return
-		}
-		if ve.rfileinfo.IsDir() {
-			vdirs = append(vdirs, ve)
-		} else {
-			vfiles = append(vfiles, ve)
-		}
+func (vdt *VDirTree) doLIST(vpath string) ([]*VEntry, error) {
+	rp, vp, err := vdt.mapVPath(vpath)
+	log.Printf("vp: %s, rp: %s, er: %s\n", vp, rp, err)
+	if err != nil {
+		return nil, err
 	}
 	// Okay to list virtual root
-	if er != nil && vp == "/" {
-		for v, r := range conf.vmap {
-			fi, er := os.Stat(r)
-			if er != nil {
-				continue
-			}
-			entry := VEntry{
-				vname:     path.Base(v),
-				rfileinfo: fi,
-			}
-			appendVEntry(entry)
-		}
-		vlist = append(vdirs, vfiles...)
-		return
+	if rp == "" {
+		list, err := listVRoot()
+		return list, err
 	}
-	if er != nil {
-		err = er
-		return
-	}
-	var fis []os.FileInfo
-	fis, err = ioutil.ReadDir(rp)
+	fi, err := os.Stat(rp)
 	if err != nil {
-		return
+		return nil, err
 	}
-	for _, fi := range fis {
-		entry := VEntry{
-			vname:     fi.Name(),
-			rfileinfo: fi,
-		}
-		appendVEntry(entry)
+	if fi.IsDir() {
+		list, err := listDir(rp, vp)
+		return list, err
 	}
-	vlist = append(vdirs, vfiles...)
-	return
+	list, err := listSingleItem(rp, vp)
+	return list, err
 }
 
 func (vdt *VDirTree) doSIZE(vpath string) (size int64, err error) {
-	vp, rp, er := vdt.mapVPath(vpath)
+	size = 0
+	rp, vp, err := vdt.mapVPath(vpath)
+	if err != nil {
+		return
+	}
 	// Okay to size virtual root
-	if er != nil && vp == "/" {
+	if vp != "/" {
+		var fi os.FileInfo
+		fi, err = os.Stat(rp)
+		// Only for files
+		if err != nil || fi.IsDir() {
+			return
+		}
+		size = fi.Size()
+	}
+	return size, err
+}
+
+func listVRoot() ([]*VEntry, error) {
+	vl := &VList{}
+	for v, r := range conf.vmap {
+		fi, err := os.Stat(r)
+		if err != nil {
+			continue
+		}
+		vl.appendVEntry(&VEntry{
+			VPath: v,
+			RPath: r,
+			rfi:   fi,
+		})
+	}
+	return vl.getList(), nil
+}
+
+func listDir(rp, vp string) ([]*VEntry, error) {
+	fis, err := ioutil.ReadDir(rp)
+	if err != nil {
+		return nil, err
+	}
+	vl := &VList{}
+	for _, fi := range fis {
+		vl.appendVEntry(&VEntry{
+			VPath: path.Join(vp, fi.Name()),
+			RPath: rp,
+			rfi:   fi,
+		})
+	}
+	return vl.getList(), nil
+}
+
+func listSingleItem(rp, vp string) ([]*VEntry, error) {
+	fi, err := os.Stat(rp)
+	if err != nil {
+		return nil, err
+	}
+	vl := &VList{}
+	vl.appendVEntry(&VEntry{
+		VPath: path.Join(vp, fi.Name()),
+		RPath: rp,
+		rfi:   fi,
+	})
+	return vl.getList(), nil
+}
+
+func (vlst *VList) appendVEntry(ve *VEntry) {
+	if !ve.IsVisible() {
 		return
 	}
-	if er != nil {
-		err = er
-		return
+	if ve.IsDir() {
+		vlst.vdirs = append(vlst.vdirs, ve)
+	} else {
+		vlst.vfiles = append(vlst.vfiles, ve)
 	}
-	fi, er := os.Stat(rp)
-	// Only for files
-	if er != nil || fi.IsDir() {
-		err = er
-	}
-	size = fi.Size()
-	return
+}
+
+func (vlst *VList) getList() []*VEntry {
+	return append(vlst.vdirs, vlst.vfiles...)
+}
+
+func isVisible(vpath string) bool {
+	vname := path.Base(vpath)
+	return vname[0] != '.' || conf.showHidden
+}
+
+func (ve *VEntry) IsVisible() bool {
+	return isVisible(ve.VPath)
+}
+
+func (ve *VEntry) IsDir() bool {
+	return ve.rfi.IsDir()
+}
+
+func (ve *VEntry) VName() string {
+	return path.Base(ve.VPath)
+}
+
+func (ve *VEntry) Size() int64 {
+	return ve.rfi.Size()
+}
+
+func (ve *VEntry) Mode() os.FileMode {
+	return ve.rfi.Mode()
+}
+
+func (ve *VEntry) ModTime() time.Time {
+	return ve.rfi.ModTime()
 }

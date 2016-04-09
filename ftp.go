@@ -166,7 +166,7 @@ func (pi *FTPPISession) processCmd(buf []byte) (quit bool) {
 			pi.reply("550 Failed to change directory.")
 		} else {
 			pi.reply("250 Directory successfully changed.")
-			if pi.vdt.vpath == "/" && pi.vdt.rpath == "" {
+			if pi.vdt.IsVRoot() {
 				log.Println("ftp: cd `ROOT'")
 			} else {
 				log.Println("ftp: cd ", pi.vdt.rpath)
@@ -206,7 +206,7 @@ func (pi *FTPPISession) processCmd(buf []byte) (quit bool) {
 			pi.reply("550 NO data connection available.")
 			return
 		}
-		_, rp, er := pi.vdt.mapVPath(args)
+		rp, _, er := pi.vdt.mapVPath(args)
 		if er != nil {
 			pi.reply("550 %s", er)
 			pi.terminateDTP()
@@ -239,7 +239,7 @@ func (pi *FTPPISession) processCmd(buf []byte) (quit bool) {
 			pi.reply("550 Data transfer channel closed.")
 			return
 		}
-		_, rp, er := pi.vdt.mapVPath(args)
+		rp, _, er := pi.vdt.mapVPath(args)
 		if er != nil {
 			pi.reply("532 Write path not allowed")
 			pi.terminateDTP()
@@ -265,7 +265,7 @@ func (pi *FTPPISession) processCmd(buf []byte) (quit bool) {
 		pi.skipBytes = skip
 		pi.reply("350 Restart position accepted %d.", skip)
 	case "RNFR":
-		vp, rp, er := pi.vdt.mapVPath(args)
+		rp, vp, er := pi.vdt.mapVPath(args)
 		if er != nil {
 			pi.reply("550 %s", er)
 			return
@@ -282,7 +282,7 @@ func (pi *FTPPISession) processCmd(buf []byte) (quit bool) {
 			pi.reply("503 Bad command sequence")
 			return
 		}
-		vp, rp, er := pi.vdt.mapVPath(args)
+		rp, vp, er := pi.vdt.mapVPath(args)
 		if er != nil {
 			pi.reply("532 Rename path not allowed")
 			return
@@ -299,7 +299,7 @@ func (pi *FTPPISession) processCmd(buf []byte) (quit bool) {
 		pi.reply("250 rename successful")
 		pi.renameFrom = ""
 	case "DELE":
-		_, rp, er := pi.vdt.mapVPath(args)
+		rp, _, er := pi.vdt.mapVPath(args)
 		if er != nil {
 			pi.reply("532 Delete path not allowed")
 			return
@@ -314,7 +314,7 @@ func (pi *FTPPISession) processCmd(buf []byte) (quit bool) {
 		}
 		pi.reply("250 OK DELETED")
 	case "RMD":
-		_, rp, er := pi.vdt.mapVPath(args)
+		rp, _, er := pi.vdt.mapVPath(args)
 		if er != nil {
 			pi.reply("532 Delete path not allowed")
 			return
@@ -329,7 +329,7 @@ func (pi *FTPPISession) processCmd(buf []byte) (quit bool) {
 		}
 		pi.reply("250 OK DELETED")
 	case "MKD":
-		vp, rp, er := pi.vdt.mapVPath(args)
+		rp, vp, er := pi.vdt.mapVPath(args)
 		if er != nil {
 			pi.reply("532 Mkdir path not allowed")
 			return
@@ -418,7 +418,7 @@ func (pi *FTPPISession) processCmd(buf []byte) (quit bool) {
 			pi.reply("502 Unknown command %s", name)
 		}
 	case "MDTM":
-		_, rp, er := pi.vdt.mapVPath(args)
+		rp, _, er := pi.vdt.mapVPath(args)
 		if er != nil {
 			pi.reply("532 %s", er)
 			return
@@ -449,11 +449,11 @@ func (pi *FTPPISession) processCmd(buf []byte) (quit bool) {
 	return false
 }
 
-func (s *FTPPISession) loadDirNameList(vp string, vlist []VEntry) string {
+func (s *FTPPISession) loadDirNameList(vp string, vlist []*VEntry) string {
 	var lines []string
 
 	for _, ve := range vlist {
-		vpath := path.Join(vp, ve.vname)
+		vpath := path.Join(vp, path.Base(ve.VPath))
 		lines = append(lines, vpath)
 	}
 
@@ -463,10 +463,10 @@ func (s *FTPPISession) loadDirNameList(vp string, vlist []VEntry) string {
 	return strings.Join(lines, "\r\n") + "\r\n"
 }
 
-func (pi *FTPPISession) loadDirContent(vlist []VEntry) string {
-	getEntryInfo := func(ve VEntry) string {
-		getEntryType := func(ve VEntry) string {
-			fmode := ve.rfileinfo.Mode()
+func (pi *FTPPISession) loadDirContent(vlist []*VEntry) string {
+	getEntryInfo := func(ve *VEntry) string {
+		getEntryType := func(ve *VEntry) string {
+			fmode := ve.Mode()
 			switch {
 			case fmode.IsDir():
 				return "d"
@@ -477,28 +477,25 @@ func (pi *FTPPISession) loadDirContent(vlist []VEntry) string {
 			case (fmode & os.ModeSymlink) != 0:
 				return "l"
 			}
-			if ve.rfileinfo.IsDir() {
-				return "d"
-			}
 			return "-"
 		}
-		getEntryMode := func(ve VEntry) string {
+		getEntryMode := func(ve *VEntry) string {
 			modes := map[int]string{4: "r", 2: "w", 1: "x", 0: "-"}
 			mcal := func(d int) string {
 				return modes[d&4] + modes[d&2] + modes[d&1]
 			}
-			perm := int(ve.rfileinfo.Mode().Perm())
+			perm := int(ve.Mode().Perm())
 			u := mcal((perm >> 6) & 7)
 			g := mcal((perm >> 3) & 7)
 			o := mcal((perm >> 0) & 7)
 			return u + g + o
 		}
-		getEntrySize := func(ve VEntry) string {
-			return strconv.FormatInt(ve.rfileinfo.Size(), 10)
+		getEntrySize := func(ve *VEntry) string {
+			return strconv.FormatInt(ve.Size(), 10)
 		}
-		getEntryTime := func(ve VEntry) string {
+		getEntryTime := func(ve *VEntry) string {
 			now := time.Now()
-			etime := ve.rfileinfo.ModTime()
+			etime := ve.ModTime()
 			if now.Year() == etime.Year() {
 				return fmt.Sprintf("%s %02d %02d:%02d",
 					etime.Month().String()[:3],
@@ -510,8 +507,8 @@ func (pi *FTPPISession) loadDirContent(vlist []VEntry) string {
 				etime.Day(), etime.Year(),
 			)
 		}
-		getEntryName := func(ve VEntry) string {
-			return ve.vname
+		getEntryName := func(ve *VEntry) string {
+			return path.Base(ve.VPath)
 		}
 
 		line := []string{}
@@ -526,7 +523,6 @@ func (pi *FTPPISession) loadDirContent(vlist []VEntry) string {
 		return strings.Join(line, " ")
 	}
 
-	// sort by directory first
 	var lines []string
 	for _, entry := range vlist {
 		line := getEntryInfo(entry)

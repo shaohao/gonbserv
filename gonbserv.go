@@ -34,7 +34,10 @@ func main() {
 	tftpPort := flag.Int("tftpport", 69, "Port of TFTP server")
 
 	ftp := flag.Bool("ftp", false, "Enable FTP server")
-	ftpPort := flag.Int("ftpport", 21, "Port ot FTP server")
+	ftpPort := flag.Int("ftpport", 21, "Port of FTP server")
+
+	http := flag.Bool("http", false, "Enable HTTP server")
+	httpPort := flag.Int("httpport", 8080, "Port of HTTP server")
 
 	ifn := flag.String("i", "", "Specify the interface/ip(net) to listen on.")
 
@@ -108,6 +111,15 @@ func main() {
 		}
 
 		allservers = append(allservers, ftpServ)
+	}
+
+	// Create HTTP Server
+	if *http {
+		httpServ := &HTTPServer{
+			listenAddr: fmt.Sprintf("%s:%d", listenIP, *httpPort),
+		}
+
+		allservers = append(allservers, httpServ)
 	}
 
 	if len(allservers) == 0 {

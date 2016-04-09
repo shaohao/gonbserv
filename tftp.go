@@ -175,7 +175,7 @@ func (s *TFTPSession) ProcessReadRequst(tid int, data []byte) {
 	bb := bytes.SplitN(buf.Bytes(), []byte{0}, 3)
 	fnb, modeb, optsb := bb[0], bb[1], bb[2]
 	_ = modeb
-	vp, rp, er := s.vdt.mapVPath(string(fnb))
+	rp, vp, er := s.vdt.mapVPath(string(fnb))
 	if er != nil {
 		errmsg := fmt.Sprintf("file %s not allowed", vp)
 		s.replyError(ERRCODE_ACCESS_VIOLATION, errmsg)
@@ -264,7 +264,7 @@ func (s *TFTPSession) ProcessWriteRequst(tid int, data []byte) {
 	bb := bytes.SplitN(buf.Bytes(), []byte{0}, 3)
 	fnb, modeb, optsb := bb[0], bb[1], bb[2]
 	_ = modeb
-	vp, rp, er := s.vdt.mapVPath(string(fnb))
+	rp, vp, er := s.vdt.mapVPath(string(fnb))
 	if er != nil {
 		errmsg := fmt.Sprintf("file %s not allowed", vp)
 		s.replyError(ERRCODE_ACCESS_VIOLATION, errmsg)

@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script src="/static/js/jquery-1.11.3.min.js"></script>
+<link rel="stylesheet" href="/static/css/semantic-2.1.8.min.css">
+<script src="/static/js/semantic-2.1.8.min.js"></script>
+{{if .IsWritable}}
+<link rel="stylesheet" href="/static/css/dropzone.css">
+<script src="/static/js/dropzone.js"></script>
+{{end}}
+<title>gonbserv - HTTP Server</title>
+</head>
+
+<body>
+{{if not .IsVRoot}}
+<div class="ui breadcrumb" style="padding-left:10px;padding-top:13px;">
+{{$pp := .CWD|path_hisplit}}
+{{$n := $pp|len}}
+{{range $i, $p := $pp}}
+	{{if $i}}
+	<i class="right chevron icon divider"></i>
+	{{end}}
+	{{if eq (plus1 $i) $n }}
+	<div class="active section">{{.|path_base}}</div>
+	{{else}}
+	<a href="/fs{{.}}" class="section">{{.|path_base}}</a>
+	{{end}}
+{{end}}
+</div>
+{{end}}
+
+{{if .IsWritable}}
+<form action="#" id="myUploadZone" class="dropzone"></form>
+<script>
+Dropzone.options.myUploadZone = {
+	uploadMultiple: true,
+};
+</script>
+{{end}}
+
+<table class="ui fixed single line table">
+	<thead>
+		<tr>
+			<th>Name</th>
+			<th>Modified</th>
+			<th class="right aligned">Size</th>
+		</tr>
+	</thead>
+	<tbody>
+{{if not .IsVRoot}}
+	<tr class="has-parent">
+		<td class="collapsing" colspan="3">
+			<i class="level up icon"></i><a href="/fs{{.CWD|path_dir}}">..</a>
+		</td>
+	</tr>
+{{end}}
+{{range .Items}}
+	<tr>
+		<td class="collapsing">
+	{{if .Mode.IsDir}}
+			<i class="folder icon"></i><a href="/fs{{.VPath}}">{{.VName}}/</a>
+	{{else}}
+			<i class="file icon"></i><a href="/fs{{.VPath}}">{{.VName}}</a>
+	{{end}}
+		</td>
+		<td class="collapsing">
+			{{.ModTime|humanize_time}}
+		</td>
+		<td class="right aligned collapsing">
+			{{humanize_size .Size}}
+		</td>
+	</tr>
+{{end}}
+	</tbody>
+</table>
+</body>
+</html>
