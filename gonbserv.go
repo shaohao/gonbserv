@@ -34,7 +34,7 @@ func main() {
 	tftpPort := flag.Int("tftpport", 69, "Port of TFTP server")
 
 	ftp := flag.Bool("ftp", false, "Enable FTP server")
-	ftpPort := flag.Int("ftpport", 21, "Port of FTP server")
+	ftpPort := flag.Int("ftpport", 2121, "Port of FTP server")
 
 	http := flag.Bool("http", false, "Enable HTTP server")
 	httpPort := flag.Int("httpport", 8080, "Port of HTTP server")
@@ -43,21 +43,24 @@ func main() {
 
 	flag.Parse()
 
-	ifi, err := net.InterfaceByName(*ifn)
+	listenIP, listenIPNet, err := net.ParseCIDR(*ifn)
 	if err != nil {
-		log.Fatal(err)
-	}
-	ips, err := ifi.Addrs()
-	if err != nil {
-		log.Fatal(err)
-	}
-	if len(ips) <= 0 {
-		errmsg := fmt.Sprintf("No IP is available on %s", ifn)
-		log.Fatal(errmsg)
-	}
-	listenIP, listenIPNet, err := net.ParseCIDR(ips[0].String()) // fetch the first valid ip
-	if err != nil {
-		log.Fatal(err)
+		ifi, err := net.InterfaceByName(*ifn)
+		if err != nil {
+			log.Fatal(err)
+		}
+		ips, err := ifi.Addrs()
+		if err != nil {
+			log.Fatal(err)
+		}
+		if len(ips) <= 0 {
+			errmsg := fmt.Sprintf("No IP is available on %s", ifn)
+			log.Fatal(errmsg)
+		}
+		listenIP, listenIPNet, err = net.ParseCIDR(ips[0].String()) // fetch the first valid ip
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	conf = &Config{}

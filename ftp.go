@@ -98,14 +98,27 @@ func (pi *FTPPISession) Delete() {
 	<-pi.sigExit
 }
 
-func (pi *FTPPISession) startDTP() error {
+func (pi *FTPPISession) startDTP(connaddr string) (err error) {
 	pi.dtp = &FTPDTPProc{}
-	addr := pi.conn.LocalAddr().String()
-	saddr, err := net.ResolveTCPAddr("tcp", addr)
-	if err != nil {
-		return err
+	var laddr, raddr *net.TCPAddr
+	var pasv bool
+	if connaddr == "" {
+		pasv = true
+		addr := pi.conn.LocalAddr().String()
+		saddr, err := net.ResolveTCPAddr("tcp", addr)
+		if err != nil {
+			return err
+		}
+		laddr, raddr = &net.TCPAddr{IP: saddr.IP, Port: 0}, nil
+	} else {
+		pasv = false
+		laddr = nil
+		raddr, err = net.ResolveTCPAddr("tcp", connaddr)
+		if err != nil {
+			return err
+		}
 	}
-	return pi.dtp.Open(saddr.IP)
+	return pi.dtp.Open(pasv, laddr, raddr)
 }
 
 func (pi *FTPPISession) terminateDTP() {
@@ -143,6 +156,7 @@ func (pi *FTPPISession) processCmd(buf []byte) (quit bool) {
 	log.Println("Client: ", instr)
 
 	quit = false
+	isEPRT := false
 	isEPSV := false
 	isAppend := false
 	isNameList := false
@@ -180,11 +194,34 @@ func (pi *FTPPISession) processCmd(buf []byte) (quit bool) {
 		pi.reply("221 Goodbye.")
 		quit = true
 	// transfer parameter commands
+	case "EPRT":
+		isEPRT = true
+		fallthrough
+	case "PORT":
+		var ip string
+		var port int
+		if isEPRT {
+			ipport := strings.Split(args, "|")
+			ip = ipport[2]
+			port, _ = strconv.Atoi(ipport[3])
+		} else {
+			ipport := strings.Split(args, ",")
+			pH, _ := strconv.Atoi(ipport[4])
+			pL, _ := strconv.Atoi(ipport[5])
+			ip = fmt.Sprintf("%s.%s.%s.%s", ipport[0], ipport[1], ipport[2], ipport[3])
+			port = ((pH << 8) | pL)
+		}
+		ipAddr := fmt.Sprintf("%s:%d", ip, port)
+		err := pi.startDTP(ipAddr)
+		if err != nil {
+			pi.reply("520 cannot start data channel")
+		}
+		pi.reply("200 Okay")
 	case "EPSV":
 		isEPSV = true
 		fallthrough
 	case "PASV":
-		err := pi.startDTP()
+		err := pi.startDTP("")
 		if err != nil {
 			pi.reply("520 cannot start data channel")
 			return
@@ -536,7 +573,7 @@ func (pi *FTPPISession) loadDirContent(vlist []*VEntry) string {
 }
 
 type FTPDTPProc struct {
-	addr *net.TCPAddr
+	laddr *net.TCPAddr
 
 	listener net.Listener
 	conn     net.Conn
@@ -548,21 +585,25 @@ type FTPDTPProc struct {
 }
 
 func (x *FTPDTPProc) IP() net.IP {
-	return x.addr.IP
+	return x.laddr.IP
 }
 
 func (x *FTPDTPProc) Port() int {
-	return x.addr.Port
+	return x.laddr.Port
 }
 
-func (x *FTPDTPProc) Open(ip net.IP) error {
-	x.addr = &net.TCPAddr{IP: ip, Port: 0}
+func (x *FTPDTPProc) Open(pasv bool, laddr, raddr *net.TCPAddr) error {
 	var err error
-	x.listener, err = net.ListenTCP("tcp", x.addr)
+	if !pasv {
+		x.conn, err = net.DialTCP("tcp", laddr, raddr)
+		return err
+	}
+	x.listener, err = net.ListenTCP("tcp", laddr)
 	if err != nil {
 		return err
 	}
-	x.addr, err = net.ResolveTCPAddr("tcp", x.listener.Addr().String())
+	// update local listen address
+	x.laddr, err = net.ResolveTCPAddr("tcp", x.listener.Addr().String())
 	if err != nil {
 		return err
 	}
@@ -627,6 +668,10 @@ func (x *FTPDTPProc) Close() {
 		x.killed = true
 	}
 
-	x.conn.Close()
-	x.listener.Close()
+	if x.conn != nil {
+		x.conn.Close()
+	}
+	if x.listener != nil {
+		x.listener.Close()
+	}
 }
