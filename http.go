@@ -41,7 +41,7 @@ func (svr *HTTPServer) staticHandle(w http.ResponseWriter, r *http.Request) {
 
 func humanizeSize(s int64) string {
 	size := float64(s)
-	units := []string{"B", "KB", "MB", "GB", "TB"}
+	units := []string{"B", "KB", "MB", "GB", "TB", "PB", "EB"}
 	for i, u := range units {
 		if size < 9*1000.0 {
 			if i == 0 {
