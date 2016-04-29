@@ -161,12 +161,12 @@ func (s *TFTPSession) SendFile(opts map[string]int64, fh *os.File) {
 		blkid := binary.BigEndian.Uint16(ackbuf[2:4])
 		rbuf := make([]byte, opts["blksize"])
 		rn, err := fh.Read(rbuf)
-		nblkid := int((blkid + 1) & 0xFFFF)
-		data := s.pkgData(nblkid, rbuf[:rn])
-		con.Write(data)
 		if err == io.EOF {
 			break
 		}
+		nblkid := int((blkid + 1) & 0xFFFF)
+		data := s.pkgData(nblkid, rbuf[:rn])
+		con.Write(data)
 	}
 }
 

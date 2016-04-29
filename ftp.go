@@ -63,7 +63,8 @@ type FTPPISession struct {
 	killed  bool
 	sigExit chan bool
 
-	dtp *FTPDTPProc
+	dtp       *FTPDTPProc
+	isEPSVAll bool
 }
 
 func (pi *FTPPISession) Create() {
@@ -198,6 +199,10 @@ func (pi *FTPPISession) processCmd(buf []byte) (quit bool) {
 		isEPRT = true
 		fallthrough
 	case "PORT":
+		if pi.isEPSVAll {
+			pi.reply("501 %s not allowed after EPSV ALL", cmd)
+			return
+		}
 		var ip string
 		var port int
 		if isEPRT {
@@ -218,6 +223,11 @@ func (pi *FTPPISession) processCmd(buf []byte) (quit bool) {
 		}
 		pi.reply("200 Okay")
 	case "EPSV":
+		if strings.ToUpper(args) == "ALL" {
+			pi.reply("200 EPSV ALL accepted")
+			pi.isEPSVAll = true
+			return
+		}
 		isEPSV = true
 		fallthrough
 	case "PASV":
@@ -229,7 +239,7 @@ func (pi *FTPPISession) processCmd(buf []byte) (quit bool) {
 		ip := pi.dtp.IP().String()
 		port := pi.dtp.Port()
 		if isEPSV {
-			pi.reply("299 Entering Extended Passive Mode (|||%d|).", port)
+			pi.reply("229 Entering Extended Passive Mode (|||%d|).", port)
 		} else {
 			ipStr := strings.Replace(ip, ".", ",", -1)
 			pH, pL := (port >> 8), (port & 0xFF)
