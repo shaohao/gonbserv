@@ -128,6 +128,11 @@ func (vdt *VDirTree) doSIZE(vpath string) (size int64, err error) {
 
 func listVRoot() ([]*VEntry, error) {
 	vl := &VList{}
+	// list root dir when mount to root
+	rp, okay := conf.vmap["/"]
+	if okay {
+		return listDir(rp, "/")
+	}
 	for v, r := range conf.vmap {
 		fi, err := os.Stat(r)
 		if err != nil {

@@ -25,6 +25,9 @@ func (svr *HTTPServer) startServer() {
 	http.HandleFunc("/", svr.rootHandle)
 	http.HandleFunc("/static/", svr.staticHandle)
 	http.HandleFunc("/fs/", svr.fsHandle)
+
+	fmt.Printf("[http] listen on %s\n", svr.listenAddr)
+
 	http.ListenAndServe(svr.listenAddr, nil)
 }
 

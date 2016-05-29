@@ -30,6 +30,8 @@ func (svr *FTPServer) startServer() {
 	}
 	defer ln.Close()
 
+	fmt.Printf("[ftp] listen on %s\n", svr.listenAddr)
+
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -154,7 +156,7 @@ func (pi *FTPPISession) processCmd(buf []byte) (quit bool) {
 	if len(sl) > 1 {
 		args = sl[1]
 	}
-	log.Println("Client: ", instr)
+	log.Println("[C]:", instr)
 
 	quit = false
 	isEPRT := false

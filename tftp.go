@@ -49,6 +49,8 @@ func (svr *TFTPServer) startServer() {
 	}
 	defer conn.Close()
 
+	fmt.Printf("[tftp] listen on %s\n", svr.listenAddr)
+
 	for {
 		buf := make([]byte, 1024)
 		n, raddr, err := conn.ReadFromUDP(buf)
