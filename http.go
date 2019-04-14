@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -23,7 +24,12 @@ func (svr *HTTPServer) startServer() {
 		vpath: "/",
 	}
 	http.HandleFunc("/", svr.rootHandle)
-	http.HandleFunc("/static/", svr.staticHandle)
+	fi, err := os.Stat("static")
+	if err != nil || !fi.IsDir() {
+		http.Handle("/static/", http.FileServer(assets))
+	} else {
+		http.HandleFunc("/static/", svr.staticHandle)
+	}
 	http.HandleFunc("/fs/", svr.fsHandle)
 
 	fmt.Printf("[http] listen on %s\n", svr.listenAddr)
@@ -151,12 +157,34 @@ func (svr *HTTPServer) getHandle(rp, vp string, w http.ResponseWriter, r *http.R
 		http.Error(w, http.StatusText(500), 500)
 		return
 	}
-	tpl := template.Must(template.New("main").Funcs(funcMap).ParseGlob("*.html"))
+	var data []byte
+	_, err = os.Stat("index.html")
+	if err != nil {
+		file, err := assets.Open("/static/index.html")
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer file.Close()
+		data, err = ioutil.ReadAll(file)
+		if err != nil {
+			log.Fatal(err)
+		}
+	} else {
+		data, err = ioutil.ReadFile("index.html")
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+	idxdata := string(data)
+	tpl, err := template.New("main").Funcs(funcMap).Parse(idxdata)
+	if err != nil {
+		log.Fatal(err)
+	}
 	content := map[string]interface{}{
 		"CWD":        path.Clean(vp),
 		"IsVRoot":    vp == "/",
 		"Items":      lst,
 		"IsWritable": conf.writable && vp != "/",
 	}
-	tpl.ExecuteTemplate(w, "index.html", content)
+	tpl.Execute(w, content)
 }
