@@ -23,9 +23,9 @@ var (
 )
 
 func main() {
-	vdir := flag.String("vdir", "", "Map directories into virtual path tree")
+	vdir := flag.String("vdir", "", "Map directories into virtual path tree. 'vdir1:path,vdir2:path,...'")
 	rw := flag.Bool("rw", false, "Allow read/write access")
-	all := flag.Bool("all", false, "Show all(hidden) entries")
+	nohidden := flag.Bool("nohidden", false, "Hide hidden entries")
 
 	dhcp := flag.Bool("dhcp", false, "Enable DHCP server")
 	dhcpRange := flag.String("dhcprange", "", "IPv4 range for DHCP server")
@@ -39,7 +39,7 @@ func main() {
 	http := flag.Bool("http", false, "Enable HTTP server")
 	httpPort := flag.Int("httpport", 8080, "Port of HTTP server")
 
-	ifn := flag.String("i", "", "Specify the interface/ip(net) to listen on.")
+	ifn := flag.String("i", "", "Specify the ifname or ip/mask to listen on.")
 
 	flag.Parse()
 
@@ -68,7 +68,7 @@ func main() {
 		log.Fatal(err)
 	}
 	conf.writable = *rw
-	conf.showHidden = *all
+	conf.showHidden = !*nohidden
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)
