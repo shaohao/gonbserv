@@ -49,15 +49,15 @@ func (c *Config) genVDMap(vdirs string) (err error) {
 		if len(item) == 0 {
 			continue
 		}
-		vr := strings.SplitN(item, ":", 2)
-		var v, r string
+		rv := strings.SplitN(item, ":", 2)
+		var r, v string
 		switch {
-		case len(vr) == 1:
-			r = filepath.Clean(vr[0])
+		case len(rv) == 1:
+			r = filepath.Clean(rv[0])
 			v = path.Join("/", filepath.Base(r))
-		case len(vr) > 1:
-			r = filepath.Clean(vr[1])
-			v = path.Clean(path.Join("/", vr[0]))
+		case len(rv) > 1:
+			r = filepath.Clean(rv[0])
+			v = path.Clean(path.Join("/", rv[1]))
 		default:
 			err = fmt.Errorf("Invalid vdir parameter %s\n", vdirs)
 			return

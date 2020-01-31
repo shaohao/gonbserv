@@ -23,7 +23,7 @@ var (
 )
 
 func main() {
-	vdir := flag.String("vdir", "", "Map directories into virtual path tree. 'vdir1:path,vdir2:path,...'")
+	vdir := flag.String("vdir", "", "Map directories into virtual path tree. 'path1:vdir1,path2:vdir2,...'")
 	rw := flag.Bool("rw", false, "Allow read/write access")
 	nohidden := flag.Bool("nohidden", false, "Do not serving hidden entries")
 
@@ -39,7 +39,7 @@ func main() {
 	http := flag.Bool("http", false, "Enable HTTP server")
 	httpPort := flag.Int("httpport", 8080, "Port of HTTP server")
 
-	ifn := flag.String("i", "", "Specify the ifname or ip/mask to listen on.")
+	ifn := flag.String("i", "0.0.0.0/0", "Specify the ifname or ip/mask to listen on.")
 
 	flag.Parse()
 
