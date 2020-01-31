@@ -25,7 +25,7 @@ var (
 func main() {
 	vdir := flag.String("vdir", "", "Map directories into virtual path tree. 'vdir1:path,vdir2:path,...'")
 	rw := flag.Bool("rw", false, "Allow read/write access")
-	nohidden := flag.Bool("nohidden", false, "Hide hidden entries")
+	nohidden := flag.Bool("nohidden", false, "Do not serving hidden entries")
 
 	dhcp := flag.Bool("dhcp", false, "Enable DHCP server")
 	dhcpRange := flag.String("dhcprange", "", "IPv4 range for DHCP server")

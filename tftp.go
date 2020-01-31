@@ -133,7 +133,10 @@ func (s *TFTPSession) pkgACK(blkid int) []byte {
 	return buf.Bytes()
 }
 
-func (s *TFTPSession) SendFile(opts map[string]int64, fh *os.File) {
+func (s *TFTPSession) SendFile(opts map[string]int64, fh *os.File, send_oack bool) {
+	var blkid uint16
+	var blksize int64
+
 	oack := s.pkgOACK(opts)
 
 	con, err := net.DialUDP("udp", nil, s.raddr)
@@ -143,13 +146,43 @@ func (s *TFTPSession) SendFile(opts map[string]int64, fh *os.File) {
 	}
 	defer con.Close()
 
-	if _, err := con.Write(oack); err != nil {
-		log.Println("Failed to write data to remote host")
-		return
+	ackbuf := make([]byte, 1024)
+	blkid = 0
+	blksize = 512
+
+	if send_oack {
+		if _, err := con.Write(oack); err != nil {
+			log.Println("Failed to write data to remote host")
+			return
+		}
+
+		n, raddr, err := con.ReadFromUDP(ackbuf)
+		_ = raddr
+		if err != nil || n < 4 {
+			return
+		}
+
+		opcode := binary.BigEndian.Uint16(ackbuf[:2])
+		if opcode != OPCODE_ACK {
+			return
+		}
+		blkid = binary.BigEndian.Uint16(ackbuf[2:4])
+		blksize = opts["blksize"]
 	}
 
-	ackbuf := make([]byte, 1024)
+	rbuf := make([]byte, blksize)
+
 	for {
+		rn, err := fh.Read(rbuf)
+		if err == io.EOF {
+			break
+		}
+
+		nblkid := int((blkid + 1) & 0xFFFF)
+
+		data := s.pkgData(nblkid, rbuf[:rn])
+		con.Write(data)
+
 		n, raddr, err := con.ReadFromUDP(ackbuf)
 		_ = raddr
 		if err != nil || n < 4 {
@@ -160,15 +193,8 @@ func (s *TFTPSession) SendFile(opts map[string]int64, fh *os.File) {
 		if opcode != OPCODE_ACK {
 			continue
 		}
-		blkid := binary.BigEndian.Uint16(ackbuf[2:4])
-		rbuf := make([]byte, opts["blksize"])
-		rn, err := fh.Read(rbuf)
-		if err == io.EOF {
-			break
-		}
-		nblkid := int((blkid + 1) & 0xFFFF)
-		data := s.pkgData(nblkid, rbuf[:rn])
-		con.Write(data)
+
+		blkid = binary.BigEndian.Uint16(ackbuf[2:4])
 	}
 }
 
@@ -205,6 +231,7 @@ func (s *TFTPSession) ProcessReadRequst(tid int, data []byte) {
 			opts["blksize"] = int64(blksize)
 		}
 	}
+	has_oack := len(optsb) > 0
 
 	fh, err := os.Open(rp)
 	if err != nil {
@@ -213,7 +240,7 @@ func (s *TFTPSession) ProcessReadRequst(tid int, data []byte) {
 		return
 	}
 	defer fh.Close()
-	s.SendFile(opts, fh)
+	s.SendFile(opts, fh, has_oack)
 }
 
 func (s *TFTPSession) RecvFile(opts map[string]int64, fh *os.File) {
