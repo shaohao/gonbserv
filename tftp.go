@@ -226,12 +226,16 @@ func (s *TFTPSession) ProcessReadRequst(tid int, data []byte) {
 			break
 		}
 		n, v := string(optsbs[i]), string(optsbs[i+1])
-		if strings.ToLower(n) == "blksize" {
+		switch strings.ToLower(n) {
+		case "blksize":
 			blksize, _ := strconv.Atoi(v)
 			opts["blksize"] = int64(blksize)
+		case "tsize":
+			tsize, _ := strconv.ParseUint(v, 10, 64)
+			opts["tsize"] = int64(tsize)
 		}
 	}
-	has_oack := len(optsb) > 0
+	has_oack := (len(optsb) > 0 && opts["tsize"] > 0)
 
 	fh, err := os.Open(rp)
 	if err != nil {
